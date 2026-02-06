@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { WebhookPayload } from '../types';
-import { supabase } from '../services/supabaseClient';
+import { supabase, SUPABASE_ANON_KEY } from '../services/supabaseClient';
 import { Send, AlertCircle, Terminal, CheckCircle2, XCircle, MessageSquare, Copy, ExternalLink, Monitor, Command, AlertTriangle, Database } from 'lucide-react';
 
 export const WebhookSimulator: React.FC = () => {
@@ -17,7 +17,7 @@ export const WebhookSimulator: React.FC = () => {
   const [curlPlatform, setCurlPlatform] = useState<'windows' | 'unix'>('windows');
   
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
+  const [status, setStatus] = useState<{msg: string, type: 'success' | 'error' | 'warning'} | null>(null);
   const [schemaError, setSchemaError] = useState(false);
 
   // Constants derived from project config
@@ -75,14 +75,15 @@ Trade ditutup sesuai strategi.`;
     };
 
     try {
-      // FIX: Menggunakan supabase.functions.invoke
-      // Metode ini otomatis menangani Auth Headers dan URL construction
-      // dan memberikan pesan error yang lebih jelas dibanding 'Failed to fetch'
+      // 1. Try using supabase.functions.invoke first
+      // This is the preferred method as it handles auth cleanly
       const { data, error } = await supabase.functions.invoke('tradingview-hook', {
         body: payload
       });
 
-      if (error) throw error;
+      if (error) {
+        throw error;
+      }
 
       setStatus({ 
         msg: event === 'entry' 
@@ -92,17 +93,60 @@ Trade ditutup sesuai strategi.`;
       });
 
     } catch (err: any) {
-      console.error(err);
+      console.error("Invoke Error:", err);
       const errString = err.message || JSON.stringify(err);
       
-      // Deteksi error spesifik
-      if (errString.includes('alert_message') && (errString.includes('column') || errString.includes('does not exist'))) {
+      // 2. FALLBACK: If invoke fails with "Failed to send a request" (usually CORS or 404/500 masked)
+      // Try a direct fetch to see if we can get a better error or if it works via direct fetch
+      if (errString.includes('Failed to send a request') || errString.includes('Failed to fetch')) {
+        try {
+           console.log("Attempting fallback fetch...");
+           const fallbackResponse = await fetch(WEBHOOK_URL, {
+             method: 'POST',
+             headers: {
+               'Content-Type': 'application/json',
+               'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+             },
+             body: JSON.stringify(payload)
+           });
+           
+           if (fallbackResponse.ok) {
+              const data = await fallbackResponse.json();
+              setStatus({ 
+                msg: event === 'entry' 
+                  ? `Signal Sent (Fallback)!` 
+                  : `Trade Closed! PnL: $${data?.pnl?.toFixed(2) || '0'}`, 
+                type: 'success' 
+              });
+              setLoading(false);
+              return;
+           } else {
+             // If fallback also fails, likely deployment issue
+             const text = await fallbackResponse.text();
+             console.error("Fallback failed:", text);
+             setStatus({ 
+               msg: `Deployment Error (${fallbackResponse.status}). Please deploy the function!`, 
+               type: 'error' 
+             });
+             // Highlight instructions
+             setShowIntegrationInfo(true);
+           }
+        } catch (fetchErr) {
+           console.error("Fallback fetch also failed:", fetchErr);
+           setStatus({ 
+            msg: "Network/CORS Error. Function likely not deployed.", 
+            type: 'error' 
+           });
+           setShowIntegrationInfo(true);
+        }
+      } 
+      // Handle Schema Error specifically
+      else if (errString.includes('alert_message') && (errString.includes('column') || errString.includes('does not exist'))) {
         setSchemaError(true);
         setStatus({ msg: "Database Schema Mismatch!", type: 'error' });
-      } else if (errString.includes('Failed to fetch') || errString.includes('Load failed')) {
-        setStatus({ msg: "Network Error: Is the Function Deployed?", type: 'error' });
       } else if (errString.includes('Relay Error') || errString.includes('not found')) {
          setStatus({ msg: "Function Not Found (404). Please deploy!", type: 'error' });
+         setShowIntegrationInfo(true);
       } else {
         setStatus({ msg: err.message || "Failed to send webhook", type: 'error' });
       }
@@ -238,7 +282,7 @@ Trade ditutup sesuai strategi.`;
              <div className="bg-red-500/10 border border-red-500/20 p-2 rounded mt-2">
                 <p className="text-red-400 text-[10px] font-bold flex items-center gap-1"><AlertTriangle size={10}/> Deployment Issue</p>
                 <p className="text-slate-400 text-[10px] mt-1 leading-relaxed">
-                  If cURL returns <code>{`{"message":"Hello undefined!"}`}</code>, your function is not deployed yet.
+                  If you see "Failed to send request", your function is likely not deployed or not accessible.
                   Run this command:
                   <div className="bg-black/40 p-1.5 rounded font-mono text-white mt-1 select-all">
                      npx supabase functions deploy tradingview-hook --no-verify-jwt

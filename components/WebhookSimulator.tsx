@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { WebhookPayload } from '../types';
-import { supabase } from '../services/supabaseClient';
+import { supabase, SUPABASE_ANON_KEY } from '../services/supabaseClient';
 import { Send, AlertCircle, Terminal, CheckCircle2, XCircle, MessageSquare, Copy, ExternalLink, Monitor, Command, AlertTriangle, Database } from 'lucide-react';
 
 export const WebhookSimulator: React.FC = () => {
@@ -70,21 +70,28 @@ Trade ditutup sesuai strategi.`;
     };
 
     try {
-      // USE FETCH TO EDGE FUNCTION INSTEAD OF RPC
-      // This ensures we test the actual webhook logic and benefit from the schema fallback
+      // FIX: Menambahkan Authorization Header
+      // Supabase Edge Functions memerlukan token (Anon Key) agar tidak menolak request (401 Unauthorized)
+      // Penolakan 401 sering dianggap "Failed to fetch" oleh browser karena masalah CORS pada response error gateway.
       const response = await fetch(WEBHOOK_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // 'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}` // Optional if function is public
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}` 
         },
         body: JSON.stringify(payload)
       });
 
-      const data = await response.json();
+      let data;
+      const text = await response.text();
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = { message: text };
+      }
 
       if (!response.ok) {
-        throw new Error(data.error || `Server error: ${response.status}`);
+        throw new Error(data.error || data.message || `Server error: ${response.status}`);
       }
 
       setStatus({ 
@@ -98,10 +105,12 @@ Trade ditutup sesuai strategi.`;
       console.error(err);
       const errString = err.message || JSON.stringify(err);
       
-      // Detect specifically if the alert_message column is missing
+      // Deteksi error spesifik
       if (errString.includes('alert_message') && (errString.includes('column') || errString.includes('does not exist'))) {
         setSchemaError(true);
         setStatus({ msg: "Database Schema Mismatch!", type: 'error' });
+      } else if (errString.includes('Failed to fetch')) {
+        setStatus({ msg: "Network Error: Check CORS or Deploy Function", type: 'error' });
       } else {
         setStatus({ msg: err.message || "Failed to send webhook", type: 'error' });
       }

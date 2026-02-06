@@ -1,0 +1,5 @@
+{
+  "name": "xTrade strategy",
+  "description": "Professional rule-based trading analytics dashboard monitoring BTCUSD and XAUUSD strategies with automated risk management and equity tracking.",
+  "requestFramePermissions": []
+}

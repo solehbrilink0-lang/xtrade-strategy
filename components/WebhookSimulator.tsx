@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { WebhookPayload } from '../types';
 import { supabase } from '../services/supabaseClient';
-import { Send, AlertCircle, Terminal, CheckCircle2, XCircle, MessageSquare, Copy, ExternalLink } from 'lucide-react';
+import { Send, AlertCircle, Terminal, CheckCircle2, XCircle, MessageSquare, Copy, ExternalLink, Monitor, Command, AlertTriangle } from 'lucide-react';
 
 export const WebhookSimulator: React.FC = () => {
   const [selectedPair, setSelectedPair] = useState<'BTCUSD' | 'XAUUSD'>('BTCUSD');
@@ -14,6 +14,7 @@ export const WebhookSimulator: React.FC = () => {
   const [customMessage, setCustomMessage] = useState<string>('');
   const [useCustomMessage, setUseCustomMessage] = useState<boolean>(true);
   const [showIntegrationInfo, setShowIntegrationInfo] = useState(false);
+  const [curlPlatform, setCurlPlatform] = useState<'windows' | 'unix'>('windows');
   
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
@@ -102,6 +103,36 @@ Trade ditutup sesuai strategi.`;
     setTimeout(() => setStatus(null), 2000);
   };
 
+  const generateCurl = () => {
+    const payload: any = {
+      symbol: selectedPair,
+      event: event
+    };
+
+    if (event === 'entry') {
+      payload.side = side;
+      payload.entry_price = entryPrice;
+      payload.stop_loss = stopLoss;
+      payload.take_profit = takeProfit;
+      if (useCustomMessage) payload.alert_message = customMessage.replace(/\n/g, '\\n');
+    } else {
+      payload.exit_price = exitPrice;
+      if (useCustomMessage) payload.alert_message = customMessage.replace(/\n/g, '\\n');
+    }
+
+    const jsonString = JSON.stringify(payload);
+
+    if (curlPlatform === 'windows') {
+      // Escape quotes for Windows CMD: " -> \"
+      const escapedJson = jsonString.replace(/"/g, '\\"');
+      return `curl -X POST ${WEBHOOK_URL} -H "Content-Type: application/json" -d "${escapedJson}"`;
+    } else {
+      return `curl -X POST "${WEBHOOK_URL}" \\
+  -H "Content-Type: application/json" \\
+  -d '${jsonString}'`;
+    }
+  };
+
   return (
     <div className="bg-slate-900 border border-slate-700 rounded-lg p-5 w-full max-w-md mx-auto shadow-2xl overflow-y-auto max-h-[90vh]">
       <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
@@ -111,7 +142,11 @@ Trade ditutup sesuai strategi.`;
         </div>
         <button 
           onClick={() => setShowIntegrationInfo(!showIntegrationInfo)}
-          className="text-[10px] uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-600 flex items-center gap-1"
+          className={`text-[10px] uppercase px-2 py-1 rounded border flex items-center gap-1 transition-colors ${
+            showIntegrationInfo 
+            ? 'bg-blue-600 text-white border-blue-500' 
+            : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-600'
+          }`}
         >
           {showIntegrationInfo ? 'Hide Info' : 'Show Integration Info'} <ExternalLink size={10} />
         </button>
@@ -119,6 +154,8 @@ Trade ditutup sesuai strategi.`;
 
       {showIntegrationInfo ? (
         <div className="mb-6 animate-fade-in space-y-4 bg-slate-950 p-4 rounded border border-blue-900/50">
+           
+           {/* Webhook URL */}
            <div>
              <label className="text-xs font-bold text-blue-400 mb-1 block">Your Webhook URL</label>
              <div className="flex gap-2">
@@ -129,11 +166,50 @@ Trade ditutup sesuai strategi.`;
                  <Copy size={14} />
                </button>
              </div>
-             <p className="text-[10px] text-slate-500 mt-1">
-               Deploy command: <span className="font-mono text-slate-400">npx supabase functions deploy tradingview-hook --no-verify-jwt</span>
-             </p>
            </div>
 
+           {/* cURL Generator */}
+           <div>
+             <div className="flex items-center justify-between mb-1">
+               <label className="text-xs font-bold text-blue-400 block">Generated cURL Command</label>
+               <div className="flex bg-slate-900 rounded border border-slate-800 p-0.5">
+                 <button 
+                   onClick={() => setCurlPlatform('windows')}
+                   className={`px-2 py-0.5 text-[10px] rounded flex items-center gap-1 ${curlPlatform === 'windows' ? 'bg-slate-700 text-white' : 'text-slate-500'}`}
+                 >
+                   <Monitor size={10} /> Windows
+                 </button>
+                 <button 
+                   onClick={() => setCurlPlatform('unix')}
+                   className={`px-2 py-0.5 text-[10px] rounded flex items-center gap-1 ${curlPlatform === 'unix' ? 'bg-slate-700 text-white' : 'text-slate-500'}`}
+                 >
+                   <Command size={10} /> Mac/Linux
+                 </button>
+               </div>
+             </div>
+             <div className="relative">
+               <pre className="bg-black/50 p-2 rounded text-[10px] text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap break-all border border-slate-800 max-h-32">
+                 {generateCurl()}
+               </pre>
+               <button onClick={() => copyToClipboard(generateCurl())} className="absolute top-2 right-2 bg-slate-800/80 p-1.5 rounded hover:bg-slate-700 text-slate-400 backdrop-blur">
+                 <Copy size={12} />
+               </button>
+             </div>
+             
+             {/* Troubleshooting Box */}
+             <div className="bg-red-500/10 border border-red-500/20 p-2 rounded mt-2">
+                <p className="text-red-400 text-[10px] font-bold flex items-center gap-1"><AlertTriangle size={10}/> Deployment Issue</p>
+                <p className="text-slate-400 text-[10px] mt-1 leading-relaxed">
+                  If cURL returns <code>{`{"message":"Hello undefined!"}`}</code>, your function is not deployed yet.
+                  Run this command:
+                  <div className="bg-black/40 p-1.5 rounded font-mono text-white mt-1 select-all">
+                     npx supabase functions deploy tradingview-hook --no-verify-jwt
+                  </div>
+                </p>
+             </div>
+           </div>
+
+           {/* TradingView Template */}
            <div>
              <label className="text-xs font-bold text-blue-400 mb-1 block">TradingView JSON Template</label>
              <div className="relative">

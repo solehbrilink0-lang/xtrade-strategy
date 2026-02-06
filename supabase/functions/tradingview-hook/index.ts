@@ -1,23 +1,34 @@
 // File ini adalah referensi untuk "Edge Function" Supabase.
 // Anda harus mendeploy ini menggunakan Supabase CLI:
 // supabase functions new tradingview-hook
-// supabase functions deploy tradingview-hook
+// supabase functions deploy tradingview-hook --no-verify-jwt
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
 
 declare const Deno: any;
 
 const supabase = createClient(
   Deno.env.get('SUPABASE_URL') ?? '',
-  // UPDATE: Menggunakan variable SUPABASE_SERVICE_ROLE_KEY sesuai perintah Anda
   Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 )
 
 Deno.serve(async (req: any) => {
+  // Handle CORS preflight request
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
   try {
     const payload = await req.json()
-    // Menambahkan alert_message ke destructuring
     const { symbol, event, side, entry_price, stop_loss, trade_id, alert_message } = payload
+
+    // Log request untuk debugging di Supabase Dashboard
+    console.log(`Received Webhook: ${event} for ${symbol}`, payload);
 
     // 1. Ambil data Strategy saat ini
     const { data: strategy, error: stratError } = await supabase
@@ -27,12 +38,14 @@ Deno.serve(async (req: any) => {
       .single()
 
     if (stratError || !strategy) {
-      return new Response(JSON.stringify({ error: 'Strategy not found' }), { status: 404 })
+      return new Response(JSON.stringify({ error: 'Strategy not found' }), { 
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
     }
 
     // ----------------LOGIKA ENTRY----------------
     if (event === 'entry') {
-      // Risk Management: 1% Equity
       const riskPerTrade = 0.01
       const equity = parseFloat(strategy.current_equity)
       const riskAmount = equity * riskPerTrade
@@ -44,7 +57,6 @@ Deno.serve(async (req: any) => {
         positionSize = riskAmount / dist
       }
 
-      // Simpan Trade Baru beserta alert_message custom
       const { error: insertError } = await supabase
         .from('trades')
         .insert({
@@ -59,13 +71,12 @@ Deno.serve(async (req: any) => {
           risk_amount: riskAmount,
           status: 'OPEN',
           entry_time: new Date().toISOString(),
-          alert_message: alert_message || null // Simpan pesan dari TV
+          alert_message: alert_message || null
         })
 
       if (insertError) throw insertError
 
-      // TRIGGER PUSH NOTIFICATION OTOMATIS
-      // Memanggil fungsi 'push' agar notifikasi masuk ke HP
+      // TRIGGER PUSH NOTIFICATION
       await supabase.functions.invoke('push', {
         body: {
           record: {
@@ -79,26 +90,30 @@ Deno.serve(async (req: any) => {
         }
       });
 
-      return new Response(JSON.stringify({ message: 'Entry Recorded & Push Sent', size: positionSize }), { status: 200 })
+      return new Response(JSON.stringify({ message: 'Entry Recorded & Push Sent', size: positionSize }), { 
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
     }
 
     // ----------------LOGIKA EXIT----------------
     if (event === 'exit') {
-      const exitPrice = payload.exit_price || entry_price // Fallback
+      const exitPrice = payload.exit_price || entry_price
 
-      // Cari trade yang masih OPEN
       const { data: openTrade, error: tradeError } = await supabase
         .from('trades')
         .select('*')
         .eq('symbol', symbol)
         .eq('status', 'OPEN')
-        .single() // Asumsi 1 open trade per pair
+        .single()
 
       if (!openTrade) {
-        return new Response(JSON.stringify({ message: 'No open trade found to close' }), { status: 200 })
+        return new Response(JSON.stringify({ message: 'No open trade found to close' }), { 
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
       }
 
-      // Hitung PnL
       const size = parseFloat(openTrade.position_size)
       let pnl = 0
       if (openTrade.side === 'buy') {
@@ -107,13 +122,11 @@ Deno.serve(async (req: any) => {
         pnl = (openTrade.entry_price - exitPrice) * size
       }
 
-      // Update Equity & Drawdown
       const currentEquity = parseFloat(strategy.current_equity)
       const newEquity = currentEquity + pnl
       const peakEquity = Math.max(parseFloat(strategy.peak_equity), newEquity)
       const drawdown = ((peakEquity - newEquity) / peakEquity) * 100
 
-      // Update Trade jadi CLOSED
       await supabase.from('trades').update({
         status: 'CLOSED',
         exit_price: exitPrice,
@@ -121,14 +134,12 @@ Deno.serve(async (req: any) => {
         pnl: pnl
       }).eq('id', openTrade.id)
 
-      // Update Strategy
       await supabase.from('strategies').update({
         current_equity: newEquity,
         peak_equity: peakEquity,
         max_drawdown: Math.max(parseFloat(strategy.max_drawdown), drawdown)
       }).eq('symbol', symbol)
 
-      // TRIGGER PUSH NOTIFICATION OTOMATIS (EXIT)
       await supabase.functions.invoke('push', {
         body: {
           record: {
@@ -141,12 +152,21 @@ Deno.serve(async (req: any) => {
         }
       });
 
-      return new Response(JSON.stringify({ message: 'Exit Recorded & Push Sent', pnl: pnl }), { status: 200 })
+      return new Response(JSON.stringify({ message: 'Exit Recorded & Push Sent', pnl: pnl }), { 
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
     }
 
-    return new Response(JSON.stringify({ message: 'Event not handled' }), { status: 400 })
+    return new Response(JSON.stringify({ message: 'Event not handled' }), { 
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
 
   } catch (err: any) {
-    return new Response(JSON.stringify({ error: err.message }), { status: 500 })
+    return new Response(JSON.stringify({ error: err.message }), { 
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
   }
 })

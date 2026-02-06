@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { WebhookPayload } from '../types';
 import { supabase } from '../services/supabaseClient';
-import { Send, AlertCircle, Terminal, CheckCircle2, XCircle, MessageSquare, Copy, ExternalLink, Monitor, Command, AlertTriangle } from 'lucide-react';
+import { Send, AlertCircle, Terminal, CheckCircle2, XCircle, MessageSquare, Copy, ExternalLink, Monitor, Command, AlertTriangle, Database } from 'lucide-react';
 
 export const WebhookSimulator: React.FC = () => {
   const [selectedPair, setSelectedPair] = useState<'BTCUSD' | 'XAUUSD'>('BTCUSD');
@@ -18,6 +18,7 @@ export const WebhookSimulator: React.FC = () => {
   
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<{msg: string, type: 'success' | 'error'} | null>(null);
+  const [schemaError, setSchemaError] = useState(false);
 
   // Constants derived from project config
   const PROJECT_ID = "xcoaqykpbmaiaawheefj"; 
@@ -57,6 +58,7 @@ Trade ditutup sesuai strategi.`;
 
     setLoading(true);
     setStatus(null);
+    setSchemaError(false);
 
     const payload: WebhookPayload = {
       symbol: selectedPair,
@@ -91,7 +93,15 @@ Trade ditutup sesuai strategi.`;
 
     } catch (err: any) {
       console.error(err);
-      setStatus({ msg: err.message || "Failed to send webhook", type: 'error' });
+      const errString = err.message || JSON.stringify(err);
+      
+      // Detect specifically if the alert_message column is missing
+      if (errString.includes('alert_message') && (errString.includes('column') || errString.includes('does not exist'))) {
+        setSchemaError(true);
+        setStatus({ msg: "Database Schema Mismatch!", type: 'error' });
+      } else {
+        setStatus({ msg: err.message || "Failed to send webhook", type: 'error' });
+      }
     } finally {
       setLoading(false);
     }
@@ -151,6 +161,30 @@ Trade ditutup sesuai strategi.`;
           {showIntegrationInfo ? 'Hide Info' : 'Show Integration Info'} <ExternalLink size={10} />
         </button>
       </div>
+
+      {/* SCHEMA ERROR ALERT - ONLY SHOWS WHEN ERROR DETECTED */}
+      {schemaError && (
+        <div className="bg-red-900/40 p-4 rounded border border-red-500 mb-4 animate-bounce-in">
+          <div className="flex items-center gap-2 mb-2">
+            <Database className="text-red-400" size={18} />
+            <p className="font-bold text-red-200 text-sm">Database Update Required</p>
+          </div>
+          <p className="text-xs text-red-200 mb-2 leading-relaxed">
+            The database is missing the <code>alert_message</code> column. Run this command in your Supabase SQL Editor to fix it:
+          </p>
+          <div className="relative group">
+            <code className="block bg-black/60 p-3 rounded text-[10px] font-mono select-all text-yellow-400 border border-red-500/30">
+              ALTER TABLE public.trades ADD COLUMN IF NOT EXISTS alert_message TEXT;
+            </code>
+            <button 
+              onClick={() => copyToClipboard('ALTER TABLE public.trades ADD COLUMN IF NOT EXISTS alert_message TEXT;')}
+              className="absolute top-2 right-2 p-1 bg-white/10 hover:bg-white/20 rounded text-white opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              <Copy size={12}/>
+            </button>
+          </div>
+        </div>
+      )}
 
       {showIntegrationInfo ? (
         <div className="mb-6 animate-fade-in space-y-4 bg-slate-950 p-4 rounded border border-blue-900/50">

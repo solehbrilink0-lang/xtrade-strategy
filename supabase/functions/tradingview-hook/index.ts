@@ -57,9 +57,8 @@ Deno.serve(async (req: any) => {
         positionSize = riskAmount / dist
       }
 
-      const { error: insertError } = await supabase
-        .from('trades')
-        .insert({
+      // Siapkan data trade
+      const tradeData: any = {
           id: trade_id || `t_${Date.now()}`,
           symbol: symbol,
           strategy_name: strategy.strategy_name,
@@ -72,11 +71,26 @@ Deno.serve(async (req: any) => {
           status: 'OPEN',
           entry_time: new Date().toISOString(),
           alert_message: alert_message || null
-        })
+      };
+
+      // Coba Insert
+      let { error: insertError } = await supabase
+        .from('trades')
+        .insert(tradeData);
+
+      // FALLBACK: Jika error karena kolom 'alert_message' tidak ada (Schema mismatch)
+      // Kita retry insert TANPA kolom alert_message agar trade tetap masuk.
+      if (insertError && insertError.message && insertError.message.includes('alert_message')) {
+         console.warn("Schema mismatch: 'alert_message' column missing in DB. Retrying without it.");
+         delete tradeData.alert_message;
+         const retry = await supabase.from('trades').insert(tradeData);
+         insertError = retry.error;
+      }
 
       if (insertError) throw insertError
 
       // TRIGGER PUSH NOTIFICATION
+      // Kita tetap kirim alert_message di notifikasi meskipun tidak tersimpan di DB
       await supabase.functions.invoke('push', {
         body: {
           record: {

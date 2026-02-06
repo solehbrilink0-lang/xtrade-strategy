@@ -168,8 +168,10 @@ const App: React.FC = () => {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(tradesChannel);
-      supabase.removeChannel(strategiesChannel);
+      if (supabase) {
+        supabase.removeChannel(tradesChannel);
+        supabase.removeChannel(strategiesChannel);
+      }
     };
   }, [addNotification, fetchData]);
 

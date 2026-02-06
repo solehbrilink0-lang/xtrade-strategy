@@ -51,11 +51,6 @@ Trade ditutup sesuai strategi.`;
   }, [event, side, selectedPair, entryPrice, stopLoss, takeProfit, exitPrice, useCustomMessage]);
 
   const handleSend = async () => {
-    if (!supabase) {
-      setStatus({ msg: "Supabase client missing", type: "error" });
-      return;
-    }
-
     setLoading(true);
     setStatus(null);
     setSchemaError(false);
@@ -75,13 +70,21 @@ Trade ditutup sesuai strategi.`;
     };
 
     try {
-      // Call the Database Function (RPC) directly
-      const { data, error } = await supabase.rpc('handle_webhook', { payload });
+      // USE FETCH TO EDGE FUNCTION INSTEAD OF RPC
+      // This ensures we test the actual webhook logic and benefit from the schema fallback
+      const response = await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // 'Authorization': `Bearer ${process.env.SUPABASE_ANON_KEY}` // Optional if function is public
+        },
+        body: JSON.stringify(payload)
+      });
 
-      if (error) throw error;
+      const data = await response.json();
 
-      if (data && data.error) {
-         throw new Error(data.error);
+      if (!response.ok) {
+        throw new Error(data.error || `Server error: ${response.status}`);
       }
 
       setStatus({ 

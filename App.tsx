@@ -9,6 +9,7 @@ import { initStrategy } from './services/tradingEngine';
 import { StrategyDashboard } from './components/StrategyDashboard';
 import { subscribeToPush } from './services/pushService';
 import { supabase } from './services/supabaseClient';
+import { WebhookSimulator } from './components/WebhookSimulator';
 import { 
   LayoutDashboard, 
   Bitcoin, 
@@ -21,7 +22,8 @@ import {
   Radio,
   Wifi,
   WifiOff,
-  RefreshCw
+  RefreshCw,
+  TestTube
 } from 'lucide-react';
 
 // --- CUSTOM COMPONENTS ---
@@ -48,6 +50,7 @@ const App: React.FC = () => {
   const [notifications, setNotifications] = useState<{id: number, msg: string, type: 'info' | 'success' | 'alert'}[]>([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const [isSimulatorOpen, setIsSimulatorOpen] = useState(false);
   
   // Connection States
   const [dbConnected, setDbConnected] = useState<boolean>(false);
@@ -227,6 +230,21 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex overflow-hidden">
+      {/* SIMULATOR MODAL */}
+      {isSimulatorOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="relative w-full max-w-md">
+            <button 
+              onClick={() => setIsSimulatorOpen(false)} 
+              className="absolute -top-10 right-0 text-slate-400 hover:text-white flex items-center gap-2"
+            >
+              Close <X size={20}/>
+            </button>
+            <WebhookSimulator />
+          </div>
+        </div>
+      )}
+
       {isMobileMenuOpen && (
         <div className="fixed inset-0 z-50 bg-black/80 lg:hidden" onClick={() => setIsMobileMenuOpen(false)}></div>
       )}
@@ -264,6 +282,15 @@ const App: React.FC = () => {
           <div className="pt-4 pb-2 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Strategies</div>
           <SidebarItem id="BTCUSD" label="Bitcoin (BTC)" icon={Bitcoin} color="text-orange-500" />
           <SidebarItem id="XAUUSD" label="Gold (XAU)" icon={Coins} color="text-yellow-500" />
+          
+          <div className="pt-4 pb-2 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Testing</div>
+          <button
+            onClick={() => { setIsSimulatorOpen(true); setIsMobileMenuOpen(false); }}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all text-slate-400 hover:bg-slate-800/50 hover:text-white group"
+          >
+            <TestTube size={20} className="text-pink-500 group-hover:animate-pulse" />
+            <span className="font-medium">Test Webhook</span>
+          </button>
         </nav>
 
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-800 space-y-3">

@@ -18,7 +18,10 @@ import {
   X,
   Activity,
   Smartphone,
-  Radio
+  Radio,
+  Wifi,
+  WifiOff,
+  RefreshCw
 } from 'lucide-react';
 
 // --- CUSTOM COMPONENTS ---
@@ -45,17 +48,23 @@ const App: React.FC = () => {
   const [notifications, setNotifications] = useState<{id: number, msg: string, type: 'info' | 'success' | 'alert'}[]>([]);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
+  
+  // Connection States
   const [dbConnected, setDbConnected] = useState<boolean>(false);
+  const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'SUBSCRIBED' | 'CLOSED' | 'CHANNEL_ERROR'>('CONNECTING');
   const [isSubscribing, setIsSubscribing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
   // --- LOGIC ---
 
   const addNotification = useCallback((msg: string, type: 'info' | 'success' | 'alert' = 'info') => {
     const id = Date.now();
     setNotifications(prev => [{id, msg, type}, ...prev].slice(0, 5));
+    
+    // Auto remove after 7 seconds
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== id));
-    }, 5000);
+    }, 7000);
   }, []);
 
   const handlePushSubscribe = async () => {
@@ -74,51 +83,61 @@ const App: React.FC = () => {
   const fetchData = useCallback(async () => {
     if (!supabase) return;
     
-    const { data: strategiesData } = await supabase.from('strategies').select('*');
-    const { data: tradesData } = await supabase.from('trades').select('*').order('entry_time', { ascending: true });
+    try {
+      const { data: strategiesData, error: stratError } = await supabase.from('strategies').select('*');
+      const { data: tradesData, error: tradesError } = await supabase.from('trades').select('*').order('entry_time', { ascending: true });
 
-    setGlobalState(prev => {
-      const newState = { ...prev };
-      
-      // Clear trades arrays to avoid duplicates during re-sync
-      newState.strategies.BTCUSD.trades = [];
-      newState.strategies.XAUUSD.trades = [];
+      if (stratError || tradesError) throw new Error("Data fetch error");
 
-      if (strategiesData) {
-        strategiesData.forEach((s: any) => {
-          if (newState.strategies[s.symbol as PairSymbol]) {
-            newState.strategies[s.symbol as PairSymbol].currentEquity = s.current_equity;
-            newState.strategies[s.symbol as PairSymbol].peakEquity = s.peak_equity;
-            newState.strategies[s.symbol as PairSymbol].maxDrawdown = s.max_drawdown;
-          }
-        });
-      }
-      if (tradesData) {
-        tradesData.forEach((t: any) => {
-          const tradeObj: Trade = {
-            id: t.id,
-            symbol: t.symbol,
-            strategyName: t.strategy_name,
-            side: t.side,
-            entryPrice: t.entry_price,
-            stopLoss: 0,
-            takeProfit: 0,
-            entryTime: t.entry_time,
-            exitTime: t.exit_time,
-            exitPrice: t.exit_price,
-            positionSize: t.position_size,
-            riskAmount: 0, 
-            status: t.status,
-            pnl: t.pnl || 0,
-            alertMessage: t.alert_message 
-          };
-          if (newState.strategies[t.symbol as PairSymbol]) {
-              newState.strategies[t.symbol as PairSymbol].trades.push(tradeObj);
-          }
-        });
-      }
-      return newState;
-    });
+      setDbConnected(true);
+      setLastUpdated(new Date());
+
+      setGlobalState(prev => {
+        const newState = { ...prev };
+        
+        // Clear trades arrays to avoid duplicates during re-sync
+        newState.strategies.BTCUSD.trades = [];
+        newState.strategies.XAUUSD.trades = [];
+
+        if (strategiesData) {
+          strategiesData.forEach((s: any) => {
+            if (newState.strategies[s.symbol as PairSymbol]) {
+              newState.strategies[s.symbol as PairSymbol].currentEquity = s.current_equity;
+              newState.strategies[s.symbol as PairSymbol].peakEquity = s.peak_equity;
+              newState.strategies[s.symbol as PairSymbol].maxDrawdown = s.max_drawdown;
+            }
+          });
+        }
+        if (tradesData) {
+          tradesData.forEach((t: any) => {
+            const tradeObj: Trade = {
+              id: t.id,
+              symbol: t.symbol,
+              strategyName: t.strategy_name,
+              side: t.side,
+              entryPrice: t.entry_price,
+              stopLoss: 0,
+              takeProfit: 0,
+              entryTime: t.entry_time,
+              exitTime: t.exit_time,
+              exitPrice: t.exit_price,
+              positionSize: t.position_size,
+              riskAmount: 0, 
+              status: t.status,
+              pnl: t.pnl || 0,
+              alertMessage: t.alert_message 
+            };
+            if (newState.strategies[t.symbol as PairSymbol]) {
+                newState.strategies[t.symbol as PairSymbol].trades.push(tradeObj);
+            }
+          });
+        }
+        return newState;
+      });
+    } catch (err) {
+      console.error("Fetch error:", err);
+      setDbConnected(false);
+    }
   }, []);
 
   // 1. Initial Load
@@ -127,7 +146,6 @@ const App: React.FC = () => {
       console.warn("Supabase client not initialized.");
       return;
     }
-    setDbConnected(true);
     fetchData();
   }, [fetchData]);
 
@@ -135,8 +153,9 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!supabase) return;
 
-    // Listen to changes in TRADES (Entries/Exits)
-    const tradesChannel = supabase.channel('trades-updates')
+    const channel = supabase.channel('app-db-changes');
+
+    channel
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'trades' },
@@ -145,32 +164,32 @@ const App: React.FC = () => {
           const eventType = payload.eventType;
           
           if (eventType === 'INSERT') {
-            addNotification(`New Signal: ${newTrade.symbol} ${newTrade.side}`, 'success');
+            addNotification(`🔔 New Signal: ${newTrade.symbol} ${newTrade.side.toUpperCase()}`, 'success');
+            // Play sound? (Optional)
           } else if (eventType === 'UPDATE' && newTrade.status === 'CLOSED') {
              const pnl = newTrade.pnl || 0;
-             addNotification(`Trade Closed: ${newTrade.symbol} PnL: $${pnl.toFixed(2)}`, pnl > 0 ? 'success' : 'alert');
+             addNotification(`💰 Trade Closed: ${newTrade.symbol} PnL: $${pnl.toFixed(2)}`, pnl > 0 ? 'success' : 'alert');
           }
           fetchData();
         }
       )
-      .subscribe();
-
-    // Listen to changes in STRATEGIES (Equity updates)
-    const strategiesChannel = supabase.channel('strategies-updates')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'strategies' },
         () => {
-          // Silent update for equity changes
           fetchData();
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        setRealtimeStatus(status);
+        if (status === 'SUBSCRIBED') {
+          console.log("Realtime connected!");
+        }
+      });
 
     return () => {
       if (supabase) {
-        supabase.removeChannel(tradesChannel);
-        supabase.removeChannel(strategiesChannel);
+        supabase.removeChannel(channel);
       }
     };
   }, [addNotification, fetchData]);
@@ -255,7 +274,7 @@ const App: React.FC = () => {
            )}
            <div className="mt-3 text-center">
              <p className="text-[10px] text-slate-600">
-               Connection: {dbConnected ? <span className="text-emerald-500">Live Sync</span> : <span className="text-slate-500">Local View</span>}
+               Connection: {dbConnected ? <span className="text-emerald-500">Live Sync</span> : <span className="text-red-500">Disconnected</span>}
              </p>
            </div>
         </div>
@@ -264,20 +283,40 @@ const App: React.FC = () => {
       <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
         <header className="h-16 border-b border-slate-800 bg-slate-950/80 backdrop-blur flex items-center justify-between px-6 z-10">
           <button onClick={() => setIsMobileMenuOpen(true)} className="lg:hidden text-slate-400 p-2"><Menu size={24} /></button>
-          <div className="flex-1 flex items-center gap-2">
-            {dbConnected && (
-              <div className="px-2 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full flex items-center gap-2">
-                <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                <span className="text-xs text-emerald-400 font-mono">SYSTEM ACTIVE</span>
-              </div>
-            )}
+          
+          {/* Status Bar */}
+          <div className="flex-1 flex items-center gap-3">
+            {/* Realtime Status Indicator */}
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border transition-all ${
+              realtimeStatus === 'SUBSCRIBED' 
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
+                : 'bg-red-500/10 border-red-500/30 text-red-400'
+            }`}>
+              {realtimeStatus === 'SUBSCRIBED' ? <Wifi size={14} /> : <WifiOff size={14} />}
+              <span className="text-[10px] font-bold uppercase tracking-wider">
+                {realtimeStatus === 'SUBSCRIBED' ? 'Realtime ON' : realtimeStatus}
+              </span>
+            </div>
+
+            <button 
+              onClick={() => fetchData()} 
+              title="Force Refresh Data"
+              className="p-1.5 bg-slate-800 hover:bg-slate-700 rounded-full text-slate-400 transition-colors"
+            >
+              <RefreshCw size={14} />
+            </button>
+
+            <span className="text-[10px] text-slate-600 hidden md:block">
+              Updated: {lastUpdated.toLocaleTimeString()}
+            </span>
           </div>
+
           <div className="flex items-center gap-4">
             <div className="relative">
               <Bell size={20} className="text-slate-400 hover:text-white cursor-pointer transition-colors" />
               {notifications.length > 0 && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse"></span>}
             </div>
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-500 border border-slate-700"></div>
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-500 border border-slate-700 shadow-lg"></div>
           </div>
         </header>
 
@@ -344,7 +383,13 @@ const App: React.FC = () => {
                       <h4 className="text-blue-400 font-medium mb-2">Sync Status</h4>
                       {dbConnected ? (
                          <p className="text-emerald-400 text-sm font-bold flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Online</p>
-                      ) : <p className="text-slate-500 text-sm font-mono">Local / Demo</p>}
+                      ) : <p className="text-red-500 text-sm font-mono flex items-center gap-2"><WifiOff size={12}/> Offline</p>}
+                    </div>
+                    <div className="p-4 rounded-lg bg-slate-950 border border-slate-800">
+                      <h4 className="text-purple-400 font-medium mb-2">Realtime Stream</h4>
+                      <p className={`text-sm font-bold ${realtimeStatus === 'SUBSCRIBED' ? 'text-emerald-400' : 'text-red-400'}`}>
+                         {realtimeStatus}
+                      </p>
                     </div>
                     <div className="p-4 rounded-lg bg-slate-950 border border-slate-800">
                       <h4 className="text-purple-400 font-medium mb-2">Mobile Notification</h4>
@@ -368,9 +413,12 @@ const App: React.FC = () => {
 
         <div className="absolute top-20 right-6 z-50 flex flex-col gap-2 pointer-events-none">
           {notifications.map(n => (
-            <div key={n.id} className={`pointer-events-auto min-w-[300px] p-4 rounded-lg shadow-2xl border-l-4 transform transition-all animate-slide-in flex items-start gap-3 bg-slate-900/90 backdrop-blur text-white ${n.type === 'alert' ? 'border-red-500' : n.type === 'success' ? 'border-emerald-500' : 'border-blue-500'}`}>
-              <div className={`mt-1 w-2 h-2 rounded-full ${n.type === 'alert' ? 'bg-red-500' : n.type === 'success' ? 'bg-emerald-500' : 'bg-blue-500'}`} />
-              <p className="text-sm font-medium">{n.msg}</p>
+            <div key={n.id} className={`pointer-events-auto min-w-[300px] p-4 rounded-lg shadow-2xl border-l-4 transform transition-all animate-slide-in flex items-start gap-3 bg-slate-900/95 backdrop-blur text-white ${n.type === 'alert' ? 'border-red-500' : n.type === 'success' ? 'border-emerald-500' : 'border-blue-500'}`}>
+              <div className={`mt-1 min-w-[8px] h-2 rounded-full ${n.type === 'alert' ? 'bg-red-500' : n.type === 'success' ? 'bg-emerald-500' : 'bg-blue-500'}`} />
+              <div>
+                 <p className="text-sm font-medium leading-snug whitespace-pre-line">{n.msg}</p>
+                 <p className="text-[10px] text-slate-500 mt-1">Just now</p>
+              </div>
             </div>
           ))}
         </div>

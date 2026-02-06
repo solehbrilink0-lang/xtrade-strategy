@@ -6,9 +6,8 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
   Legend, Cell
 } from 'recharts';
-import { TrendingUp, TrendingDown, Activity, AlertTriangle, DollarSign, LineChart, Sparkles, Loader2, MessageSquare } from 'lucide-react';
+import { TrendingUp, TrendingDown, Activity, AlertTriangle, DollarSign, LineChart, MessageSquare } from 'lucide-react';
 import { StatsCard } from './StatsCard';
-import { analyzeStrategyPerformance } from '../services/geminiService';
 
 interface StrategyDashboardProps {
   strategy: StrategyState;
@@ -51,8 +50,6 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 export const StrategyDashboard: React.FC<StrategyDashboardProps> = ({ strategy, colorTheme }) => {
   const [chartMode, setChartMode] = useState<'equity' | 'price'>('equity');
-  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [selectedMessage, setSelectedMessage] = useState<string | null>(null);
 
   const winCount = strategy.trades.filter(t => t.pnl > 0).length;
@@ -89,21 +86,6 @@ export const StrategyDashboard: React.FC<StrategyDashboardProps> = ({ strategy, 
   const minPrice = prices.length ? Math.min(...prices) * 0.99 : 'auto';
   const maxPrice = prices.length ? Math.max(...prices) * 1.01 : 'auto';
 
-  const handleAiAnalysis = async () => {
-    setIsAnalyzing(true);
-    // Note: In a real app we might want to pass both strategies, but here we analyze the current one
-    // We mock the "other" strategy as the current one for simplicity in this component scope, 
-    // or you could refactor to pass both. For now, let's analyze the current strategy deeply.
-    try {
-      const result = await analyzeStrategyPerformance(strategy, strategy); 
-      setAiAnalysis(result);
-    } catch (e) {
-      setAiAnalysis("Could not generate analysis. Please check API Key.");
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
   return (
     <div className="space-y-6 animate-fade-in">
       {/* KPI Grid */}
@@ -136,43 +118,6 @@ export const StrategyDashboard: React.FC<StrategyDashboardProps> = ({ strategy, 
           icon={Activity}
           color="blue"
         />
-      </div>
-
-      {/* AI Analysis Section */}
-      <div className="bg-gradient-to-r from-slate-900 to-slate-900 border border-slate-800 rounded-xl p-1 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 blur-3xl rounded-full pointer-events-none"></div>
-        <div className="bg-slate-950/50 p-5 rounded-lg">
-          <div className="flex justify-between items-start mb-4">
-             <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-               <Sparkles size={18} className="text-purple-400" /> AI Performance Insight
-             </h3>
-             {!aiAnalysis && (
-               <button 
-                 onClick={handleAiAnalysis}
-                 disabled={isAnalyzing}
-                 className="text-xs bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-full flex items-center gap-2 transition-all disabled:opacity-50"
-               >
-                 {isAnalyzing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                 {isAnalyzing ? 'Analyzing...' : 'Generate Analysis'}
-               </button>
-             )}
-          </div>
-          
-          {aiAnalysis ? (
-            <div className="prose prose-invert prose-sm max-w-none">
-              <p className="text-slate-300 leading-relaxed text-sm animate-fade-in">
-                {aiAnalysis}
-              </p>
-              <button onClick={() => setAiAnalysis(null)} className="text-[10px] text-slate-500 hover:text-slate-300 mt-2 underline">
-                Refresh Analysis
-              </button>
-            </div>
-          ) : (
-             <p className="text-slate-500 text-sm italic">
-               Click generate to get Gemini AI's review of your {strategy.symbol} strategy performance, risk profile, and optimization suggestions.
-             </p>
-          )}
-        </div>
       </div>
 
       {/* Main Chart Section */}

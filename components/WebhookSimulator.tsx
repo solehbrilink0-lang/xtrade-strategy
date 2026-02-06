@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { WebhookPayload } from '../types';
-import { supabase, SUPABASE_ANON_KEY } from '../services/supabaseClient';
+import { supabase } from '../services/supabaseClient';
 import { Send, AlertCircle, Terminal, CheckCircle2, XCircle, MessageSquare, Copy, ExternalLink, Monitor, Command, AlertTriangle, Database } from 'lucide-react';
 
 export const WebhookSimulator: React.FC = () => {
@@ -51,6 +51,11 @@ Trade ditutup sesuai strategi.`;
   }, [event, side, selectedPair, entryPrice, stopLoss, takeProfit, exitPrice, useCustomMessage]);
 
   const handleSend = async () => {
+    if (!supabase) {
+      setStatus({ msg: "Supabase client not initialized.", type: 'error' });
+      return;
+    }
+
     setLoading(true);
     setStatus(null);
     setSchemaError(false);
@@ -70,34 +75,19 @@ Trade ditutup sesuai strategi.`;
     };
 
     try {
-      // FIX: Menambahkan Authorization Header
-      // Supabase Edge Functions memerlukan token (Anon Key) agar tidak menolak request (401 Unauthorized)
-      // Penolakan 401 sering dianggap "Failed to fetch" oleh browser karena masalah CORS pada response error gateway.
-      const response = await fetch(WEBHOOK_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${SUPABASE_ANON_KEY}` 
-        },
-        body: JSON.stringify(payload)
+      // FIX: Menggunakan supabase.functions.invoke
+      // Metode ini otomatis menangani Auth Headers dan URL construction
+      // dan memberikan pesan error yang lebih jelas dibanding 'Failed to fetch'
+      const { data, error } = await supabase.functions.invoke('tradingview-hook', {
+        body: payload
       });
 
-      let data;
-      const text = await response.text();
-      try {
-        data = JSON.parse(text);
-      } catch {
-        data = { message: text };
-      }
-
-      if (!response.ok) {
-        throw new Error(data.error || data.message || `Server error: ${response.status}`);
-      }
+      if (error) throw error;
 
       setStatus({ 
         msg: event === 'entry' 
           ? `Signal Sent! Msg: ${useCustomMessage ? 'Custom' : 'Default'}` 
-          : `Trade Closed! PnL: $${data.pnl?.toFixed(2) || '0'}`, 
+          : `Trade Closed! PnL: $${data?.pnl?.toFixed(2) || '0'}`, 
         type: 'success' 
       });
 
@@ -109,8 +99,10 @@ Trade ditutup sesuai strategi.`;
       if (errString.includes('alert_message') && (errString.includes('column') || errString.includes('does not exist'))) {
         setSchemaError(true);
         setStatus({ msg: "Database Schema Mismatch!", type: 'error' });
-      } else if (errString.includes('Failed to fetch')) {
-        setStatus({ msg: "Network Error: Check CORS or Deploy Function", type: 'error' });
+      } else if (errString.includes('Failed to fetch') || errString.includes('Load failed')) {
+        setStatus({ msg: "Network Error: Is the Function Deployed?", type: 'error' });
+      } else if (errString.includes('Relay Error') || errString.includes('not found')) {
+         setStatus({ msg: "Function Not Found (404). Please deploy!", type: 'error' });
       } else {
         setStatus({ msg: err.message || "Failed to send webhook", type: 'error' });
       }
